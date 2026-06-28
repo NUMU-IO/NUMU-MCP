@@ -15,10 +15,27 @@ from ..formatting import (
     validate_choice,
     validate_uuid,
 )
+from ..guards import confirmation_message, consume_token, issue_token
 from ..runtime import get_client
-from ._base import dumps, err, items_of, page_meta
+from ._base import dumps, err, items_of, page_meta, record_mutation
 
 _PRODUCT_TYPES = ("physical", "digital", "service")
+# Fields update_product can change — used to snapshot before-state for undo.
+_UNDOABLE_FIELDS = (
+    "name",
+    "price",
+    "sku",
+    "description",
+    "quantity",
+    "low_stock_threshold",
+    "compare_at_price",
+    "cost_price",
+    "category_id",
+    "status",
+    "tags",
+    "images",
+)
+_NUMERIC_FIELDS = {"price", "compare_at_price", "cost_price"}
 
 
 def _product_summary(p: dict[str, Any]) -> dict[str, Any]:
@@ -168,9 +185,15 @@ async def create_product(
 
         product = await get_client().post("products", json=body)
         summary = _product_summary(product) if isinstance(product, dict) else product
+        new_id = product.get("id") if isinstance(product, dict) else None
+        record_mutation(
+            "create_product",
+            {"name": body["name"], "price": price},
+            summary=f"created product {new_id}",
+        )
         return dumps({"created": True, "product": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "create_product"})
 
 
 @mcp.tool()
@@ -238,23 +261,66 @@ async def update_product(
 
             raise ValidationError("Provide at least one field to update.")
 
+        # Snapshot the before-state of exactly the fields being changed, so the
+        # edit can be reversed via undo_last_action.
+        before = await get_client().get(f"products/{pid}")
+        undo = None
+        if isinstance(before, dict):
+            restore: dict[str, Any] = {}
+            for key in body:
+                if key not in _UNDOABLE_FIELDS:
+                    continue
+                prev = before.get(key)
+                if key in _NUMERIC_FIELDS and prev is not None:
+                    try:
+                        prev = float(prev)
+                    except (TypeError, ValueError):
+                        prev = None
+                restore[key] = prev
+            if restore:
+                undo = {
+                    "description": f"Restore product {pid} fields {list(restore)}",
+                    "request": {
+                        "method": "PATCH",
+                        "path": f"products/{pid}",
+                        "json": restore,
+                        "store_scoped": True,
+                    },
+                }
+
         product = await get_client().patch(f"products/{pid}", json=body)
         summary = _product_summary(product) if isinstance(product, dict) else product
+        record_mutation(
+            "update_product",
+            {"product_id": pid, "fields": list(body)},
+            summary=f"updated {list(body)} on product {pid}",
+            undo=undo,
+        )
         return dumps({"updated": True, "product": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "update_product", "product_id": product_id})
 
 
 @mcp.tool()
-async def delete_product(product_id: str) -> str:
-    """Delete a product permanently.
+async def delete_product(product_id: str, confirm: str | None = None) -> str:
+    """Delete a product permanently. Irreversible — requires confirmation.
+
+    Call once without `confirm` to get a confirmation token, confirm with the
+    user, then call again passing that token as `confirm`.
 
     Args:
         product_id: The product's UUID.
+        confirm: The confirmation token from the first call.
     """
     try:
         pid = validate_uuid(product_id, "product_id")
+        args = {"product_id": pid}
+        if not confirm:
+            return confirmation_message("delete_product", args, issue_token("delete_product", args))
+        if not consume_token(confirm, "delete_product", args):
+            return "Confirmation token is invalid or expired. Re-run delete_product to get a new one."
         await get_client().delete(f"products/{pid}")
+        record_mutation("delete_product", args, summary=f"deleted product {pid}")
         return dumps({"deleted": True, "product_id": pid})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "delete_product", "product_id": product_id})

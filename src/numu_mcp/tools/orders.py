@@ -16,8 +16,9 @@ from ..formatting import (
     validate_choice,
     validate_uuid,
 )
+from ..guards import confirmation_message, consume_token, issue_token
 from ..runtime import get_client
-from ._base import dumps, err, items_of, page_meta
+from ._base import dumps, err, items_of, page_meta, record_mutation
 
 
 def _order_summary(o: dict[str, Any]) -> dict[str, Any]:
@@ -134,31 +135,66 @@ async def update_order_status(order_id: str, status: str, reason: str | None = N
     try:
         oid = validate_uuid(order_id, "order_id")
         new_status = validate_choice(status, ORDER_STATUSES, "status")
+        # Capture the previous status so the change can be undone.
+        before = await get_client().get(f"orders/{oid}")
+        prev_status = before.get("status") if isinstance(before, dict) else None
+
         body: dict[str, Any] = {"status": new_status}
         if reason:
             body["reason"] = reason
         o = await get_client().patch(f"orders/{oid}/status", json=body)
         summary = _order_summary(o) if isinstance(o, dict) else o
+
+        undo = None
+        if prev_status and prev_status != new_status:
+            undo = {
+                "description": f"Restore order {oid} status to '{prev_status}'",
+                "request": {
+                    "method": "PATCH",
+                    "path": f"orders/{oid}/status",
+                    "json": {"status": prev_status},
+                    "store_scoped": True,
+                },
+            }
+        record_mutation(
+            "update_order_status",
+            {"order_id": oid, "status": new_status},
+            summary=f"{prev_status} -> {new_status}",
+            undo=undo,
+        )
         return dumps({"updated": True, "order": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "update_order_status", "order_id": order_id})
 
 
 @mcp.tool()
-async def cancel_order(order_id: str, reason: str | None = None) -> str:
-    """Cancel an order.
+async def cancel_order(
+    order_id: str, reason: str | None = None, confirm: str | None = None
+) -> str:
+    """Cancel an order. Irreversible — requires confirmation.
+
+    Call once without `confirm` to get a confirmation token, confirm with the
+    user, then call again passing that token as `confirm`.
 
     Args:
         order_id: The order's UUID.
         reason: Optional cancellation reason (recorded on the order).
+        confirm: The confirmation token from the first call.
     """
     try:
         oid = validate_uuid(order_id, "order_id")
+        args = {"order_id": oid, "reason": reason}
+        if not confirm:
+            return confirmation_message("cancel_order", args, issue_token("cancel_order", args))
+        if not consume_token(confirm, "cancel_order", args):
+            return "Confirmation token is invalid or expired. Re-run cancel_order to get a new one."
+
         params = {"reason": reason} if reason else None
         await get_client().delete(f"orders/{oid}", params=params)
+        record_mutation("cancel_order", args, summary=f"cancelled order {oid}")
         return dumps({"cancelled": True, "order_id": oid})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "cancel_order", "order_id": order_id})
 
 
 @mcp.tool()
@@ -168,11 +204,14 @@ async def refund_order(
     reason: str,
     amount: float | None = None,
     reason_note: str | None = None,
+    confirm: str | None = None,
 ) -> str:
-    """Create a refund for an order (full or partial).
+    """Create a refund for an order (full or partial). Irreversible — requires
+    confirmation.
 
-    Note: depending on the merchant's setup a refund may require approval and
-    processing steps; this creates the refund request.
+    Call once without `confirm` to get a confirmation token, confirm the amount
+    with the user, then call again passing that token as `confirm`. Depending on
+    the merchant's setup a refund may then require approval/processing steps.
 
     Args:
         order_id: The order's UUID.
@@ -182,11 +221,27 @@ async def refund_order(
         amount: Required for a partial refund — the amount in major units
             (e.g. 49.99). Ignored for a full refund.
         reason_note: Optional free-text note (max 1000 chars).
+        confirm: The confirmation token from the first call.
     """
     try:
         oid = validate_uuid(order_id, "order_id")
         rtype = validate_choice(refund_type, REFUND_TYPES, "refund_type")
         rreason = validate_choice(reason, REFUND_REASONS, "reason")
+
+        gate_args = {
+            "order_id": oid,
+            "refund_type": rtype,
+            "reason": rreason,
+            "amount": amount,
+            "reason_note": reason_note,
+        }
+        if not confirm:
+            return confirmation_message(
+                "refund_order", gate_args, issue_token("refund_order", gate_args)
+            )
+        if not consume_token(confirm, "refund_order", gate_args):
+            return "Confirmation token is invalid or expired. Re-run refund_order to get a new one."
+
         body: dict[str, Any] = {"refund_type": rtype, "reason": rreason}
         if reason_note:
             body["reason_note"] = reason_note
@@ -202,6 +257,11 @@ async def refund_order(
             body["amount"] = major_to_minor(amount, currency)
 
         refund = await get_client().post(f"orders/{oid}/refunds", json=body)
+        record_mutation(
+            "refund_order",
+            {"order_id": oid, "refund_type": rtype, "reason": rreason},
+            summary=f"{rtype} refund created for order {oid}",
+        )
         return dumps({"refund_created": True, "refund": refund})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "refund_order", "order_id": order_id})

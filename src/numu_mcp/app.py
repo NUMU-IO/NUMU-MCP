@@ -35,6 +35,15 @@ How to work effectively:
   intent and key details with the user first, then act and report the result
   plainly, including IDs.
 - Use IDs from list/search results to drive detail and write operations.
+- You have memory and safety nets: every change you make is recorded
+  (`list_recent_actions` / `numu://audit/recent`) and reversible edits can be
+  rolled back with `undo_last_action`. Irreversible actions (delete/refund/
+  cancel) require a confirmation token — request it, confirm with the user, then
+  re-call with the token.
+- You have analyst tools, not just CRUD: `analyze_customer_segments` (RFM),
+  `analyze_inventory_health` (days-of-cover), and `suggest_price_adjustments`
+  turn raw data into recommendations. Batch tools (`batch_*`) act on many records
+  at once. Check `numu://system/health` if calls start failing.
 """
 
 mcp = FastMCP(name="numu", instructions=INSTRUCTIONS)

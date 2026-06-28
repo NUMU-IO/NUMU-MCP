@@ -108,16 +108,31 @@ class NumuClient:
         store_scoped: bool = True,
         params: dict[str, Any] | None = None,
         json: Any | None = None,
+        cache_ttl: float | None = None,
     ) -> Any:
         """Perform a request and return the unwrapped ``data`` payload.
 
         Returns ``None`` for empty (204) responses. Raises ``NumuApiError`` on
         any HTTP error, timeout, connection failure, or malformed response.
+
+        ``cache_ttl`` (GET only) caches the unwrapped result in-process for that
+        many seconds. Use ONLY for stable, low-churn reads — never for volatile,
+        decision-critical lists.
         """
         url = self._url(path, store_scoped=store_scoped)
         clean_params = (
             {k: v for k, v in params.items() if v is not None} if params else None
         )
+
+        use_cache = cache_ttl is not None and method.upper() == "GET"
+        cache_key = ""
+        if use_cache:
+            from . import cache as _cache
+
+            cache_key = f"{self._settings.store_id}:{url}:{clean_params}"
+            cached = _cache.get(cache_key)
+            if cached is not None:
+                return cached
         try:
             response = await self._client.request(
                 method, url, params=clean_params, json=json
@@ -161,8 +176,15 @@ class NumuClient:
 
         # Unwrap the standard {success, data, message} envelope when present.
         if isinstance(body, dict) and "data" in body and "success" in body:
-            return body["data"]
-        return body
+            result = body["data"]
+        else:
+            result = body
+
+        if use_cache:
+            from . import cache as _cache
+
+            _cache.set(cache_key, result, ttl=cache_ttl)  # type: ignore[arg-type]
+        return result
 
     # ── Convenience verbs ────────────────────────────────────────────────
     async def get(self, path: str, **kwargs: Any) -> Any:

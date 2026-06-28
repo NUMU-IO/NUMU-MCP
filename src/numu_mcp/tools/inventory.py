@@ -13,7 +13,7 @@ from ..formatting import (
     validate_uuid,
 )
 from ..runtime import get_client
-from ._base import dumps, err, items_of
+from ._base import dumps, err, items_of, record_mutation
 
 
 @mcp.tool()
@@ -98,6 +98,25 @@ async def adjust_inventory(
         if reason:
             body["reason"] = reason
         result = await get_client().post("inventory/adjust", json=body)
+        undo = {
+            "description": f"Reverse stock adjustment of {adjustment} on {pid}",
+            "request": {
+                "method": "POST",
+                "path": "inventory/adjust",
+                "json": {
+                    "product_id": pid,
+                    "adjustment": -adjustment,
+                    "reason": "undo previous adjustment",
+                },
+                "store_scoped": True,
+            },
+        }
+        record_mutation(
+            "adjust_inventory",
+            {"product_id": pid, "adjustment": adjustment},
+            summary=f"adjusted {pid} by {adjustment}",
+            undo=undo,
+        )
         return dumps({"adjusted": True, "result": result})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "adjust_inventory", "product_id": product_id})

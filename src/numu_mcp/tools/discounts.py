@@ -13,7 +13,7 @@ from ..formatting import (
     validate_uuid,
 )
 from ..runtime import get_client
-from ._base import dumps, err, items_of, page_meta
+from ._base import dumps, err, items_of, page_meta, record_mutation
 
 
 def _coupon_summary(c: dict[str, Any]) -> dict[str, Any]:
@@ -84,9 +84,27 @@ async def create_discount(
 
         coupon = await get_client().post("coupons", json=body)
         summary = _coupon_summary(coupon) if isinstance(coupon, dict) else coupon
+        new_id = coupon.get("id") if isinstance(coupon, dict) else None
+        undo = None
+        if new_id:
+            undo = {
+                "description": f"Deactivate the coupon {code} just created",
+                "request": {
+                    "method": "PATCH",
+                    "path": f"coupons/{new_id}",
+                    "json": {"is_active": False},
+                    "store_scoped": True,
+                },
+            }
+        record_mutation(
+            "create_discount",
+            {"code": code, "coupon_type": ctype},
+            summary=f"created coupon {code}",
+            undo=undo,
+        )
         return dumps({"created": True, "discount": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "create_discount", "code": code})
 
 
 @mcp.tool()
@@ -135,6 +153,21 @@ async def deactivate_discount(coupon_id: str) -> str:
         cid = validate_uuid(coupon_id, "coupon_id")
         coupon = await get_client().patch(f"coupons/{cid}", json={"is_active": False})
         summary = _coupon_summary(coupon) if isinstance(coupon, dict) else coupon
+        undo = {
+            "description": f"Re-activate coupon {cid}",
+            "request": {
+                "method": "PATCH",
+                "path": f"coupons/{cid}",
+                "json": {"is_active": True},
+                "store_scoped": True,
+            },
+        }
+        record_mutation(
+            "deactivate_discount",
+            {"coupon_id": cid},
+            summary=f"deactivated coupon {cid}",
+            undo=undo,
+        )
         return dumps({"deactivated": True, "discount": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "deactivate_discount", "coupon_id": coupon_id})

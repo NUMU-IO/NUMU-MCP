@@ -61,6 +61,14 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", description="Python logging level.")
 
+    data_dir: str = Field(
+        default="",
+        description=(
+            "Directory for the local audit DB and other server-side state. "
+            "Defaults to a 'data' folder next to the package if left blank."
+        ),
+    )
+
     @field_validator("base_url")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
@@ -89,6 +97,16 @@ class Settings(BaseSettings):
         if not v:
             raise ValueError("access_token must not be empty")
         return v
+
+    @property
+    def resolved_data_dir(self) -> str:
+        """Absolute path for server-side state (audit DB, etc.)."""
+        from pathlib import Path
+
+        if self.data_dir.strip():
+            return self.data_dir.strip()
+        # Default: a 'data' folder at the package root (…/mcp/data).
+        return str(Path(__file__).resolve().parents[2] / "data")
 
     @property
     def store_api_base(self) -> str:

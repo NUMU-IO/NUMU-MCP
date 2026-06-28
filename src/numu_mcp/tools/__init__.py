@@ -5,8 +5,10 @@ Importing this package registers every tool on the shared FastMCP instance.
 
 from . import (  # noqa: F401
     analytics,
+    batch,
     customers,
     discounts,
+    intelligence,
     inventory,
     orders,
     products,
@@ -16,8 +18,10 @@ from . import (  # noqa: F401
 
 __all__ = [
     "analytics",
+    "batch",
     "customers",
     "discounts",
+    "intelligence",
     "inventory",
     "orders",
     "products",

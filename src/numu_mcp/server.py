@@ -59,6 +59,14 @@ def main() -> None:
     client = NumuClient(settings)
     init_runtime(settings, client)
 
+    # Initialize the local audit DB (best-effort; never block startup).
+    try:
+        from .audit import init_audit_db
+
+        init_audit_db()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("numu-mcp").warning("audit db init failed: %s", exc)
+
     if settings.transport == "streamable-http":
         mcp.settings.host = settings.host
         mcp.settings.port = settings.port

@@ -46,11 +46,15 @@ the FastAPI backend it talks to. No Node.js required.
 | `numu://store/overview` | Store profile, status, plan & usage, currency, payment methods, product/order/customer counts, inventory health. |
 | `numu://store/capabilities` | The live capability map: active plan, usage vs. limits, enabled plan features, the connected user's permission domains, and a **per-tool availability map** (with reasons when blocked). |
 | `numu://products/catalog` | First 100 products with stock levels, price, category and status. |
+| `numu://system/health` | MCP↔API health: config, reachability + latency, token validity. |
+| `numu://audit/recent` | The audit trail of changes the AI made (most recent first). |
 
 ### Tools (actions)
 | Domain | Tools |
 |--------|-------|
-| **Store / plan** | `get_capabilities`, `refresh_capabilities`, `get_plan_and_usage`, `list_categories` |
+| **Store / plan / audit** | `get_capabilities`, `refresh_capabilities`, `get_plan_and_usage`, `list_categories`, `list_recent_actions`, `undo_last_action` |
+| **Intelligence** | `analyze_customer_segments` (RFM), `analyze_inventory_health` (days-of-cover), `suggest_price_adjustments` |
+| **Batch** | `batch_get_orders`, `batch_get_products`, `batch_update_order_status`, `batch_adjust_inventory` |
 | **Orders** | `list_orders`, `get_order`, `update_order_status`, `cancel_order`, `refund_order` |
 | **Products** | `list_products`, `get_product`, `create_product`, `update_product`, `delete_product` |
 | **Inventory** | `list_inventory`, `inventory_stats`, `adjust_inventory` |
@@ -88,6 +92,33 @@ and maps them onto the tool surface:
 
 The probe **fails open**: if capabilities can't be loaded, calls still go
 through and the backend remains the single source of truth for authorization.
+
+---
+
+## Intelligence & safety layer
+
+Beyond CRUD, the server adds a thin layer of *good software engineering* (no
+external AI, no extra services) that makes the assistant safer and smarter:
+
+- **Audit log + undo.** Every change the AI makes is recorded to a local SQLite
+  database (`list_recent_actions`, `numu://audit/recent`). Reversible edits
+  (price/status/stock/coupon, incl. batch) store an *inverse request* so
+  `undo_last_action` can roll them back. Set `NUMU_MCP_DATA_DIR` to control where
+  the DB lives (default `mcp/data/`).
+- **Confirmation gate.** Irreversible actions (`delete_product`, `refund_order`,
+  `cancel_order`) can't run in one step — they return a token, you confirm with
+  the user, then re-call with `confirm=<token>`.
+- **Business intelligence.** `analyze_customer_segments` (RFM),
+  `analyze_inventory_health` (days-of-cover), and `suggest_price_adjustments`
+  turn raw data into recommendations using pure Python statistics. Velocity is
+  sourced from the analytics endpoint and degrades gracefully if analytics isn't
+  on the plan.
+- **Batch operations.** `batch_*` tools act on up to 50 records concurrently;
+  batch writes register a single audit entry with a combined undo.
+- **Recovery-aware errors.** Failures come back with targeted hints (wrong id,
+  expired token, plan limit, timeout) so the model can self-correct.
+- **Health check.** `numu://system/health` reports API reachability, latency and
+  token validity.
 
 ---
 
@@ -306,13 +337,17 @@ mcp/
 └── src/numu_mcp/
     ├── app.py          # FastMCP instance + operator instructions
     ├── config.py       # env-driven settings (pydantic-settings)
-    ├── client.py       # async httpx client, envelope unwrap, error normalization
+    ├── client.py       # async httpx client, envelope unwrap, errors, opt-in cache
     ├── capabilities.py # plan/permission probe + per-tool availability map
+    ├── intelligence.py # pure-Python RFM, inventory health, price rules
+    ├── audit.py        # SQLite audit log + inverse-request undo
+    ├── guards.py       # confirmation gate for irreversible actions
+    ├── cache.py        # narrow in-memory TTL cache (stable reads only)
     ├── formatting.py   # money + input validation + status enums
     ├── runtime.py      # shared client/settings singletons
-    ├── resources.py    # store overview, capabilities, product catalog
+    ├── resources.py    # overview, capabilities, catalog, health, audit
     ├── prompts.py      # daily briefing, restock alert
-    ├── server.py       # entrypoint + transport selection
-    └── tools/          # store/plan, orders, products, inventory, customers,
-                        # discounts, analytics, shipping
+    ├── server.py       # entrypoint + transport selection + audit DB init
+    └── tools/          # store/plan/audit, intelligence, batch, orders, products,
+                        # inventory, customers, discounts, analytics, shipping
 ```

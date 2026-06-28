@@ -12,7 +12,7 @@ from ..formatting import (
     validate_uuid,
 )
 from ..runtime import get_client
-from ._base import dumps, err, items_of
+from ._base import dumps, err, items_of, record_mutation
 
 
 def _shipment_summary(s: dict[str, Any]) -> dict[str, Any]:
@@ -94,9 +94,15 @@ async def create_shipment(
         summary = (
             _shipment_summary(shipment) if isinstance(shipment, dict) else shipment
         )
+        sid = shipment.get("id") if isinstance(shipment, dict) else None
+        record_mutation(
+            "create_shipment",
+            {"order_id": oid, "carrier": c},
+            summary=f"created shipment {sid} for order {oid}",
+        )
         return dumps({"created": True, "shipment": summary})
     except Exception as exc:  # noqa: BLE001
-        return err(exc)
+        return err(exc, context={"tool": "create_shipment", "order_id": order_id})
 
 
 @mcp.tool()

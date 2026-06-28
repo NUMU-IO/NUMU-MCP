@@ -52,7 +52,9 @@ async def store_overview() -> str:
     settings = get_settings()
 
     store = await _safe(
-        client.request("GET", f"stores/{settings.store_id}", store_scoped=False)
+        client.request(
+            "GET", f"stores/{settings.store_id}", store_scoped=False, cache_ttl=120
+        )
     )
     currency = "EGP"
     if isinstance(store, dict):
@@ -132,7 +134,9 @@ async def product_catalog() -> str:
     settings = get_settings()
 
     store = await _safe(
-        client.request("GET", f"stores/{settings.store_id}", store_scoped=False)
+        client.request(
+            "GET", f"stores/{settings.store_id}", store_scoped=False, cache_ttl=120
+        )
     )
     currency = (
         store.get("default_currency", "EGP") if isinstance(store, dict) else "EGP"
@@ -207,6 +211,66 @@ async def store_capabilities() -> str:
         ensure_ascii=False,
         default=str,
     )
+
+
+@mcp.resource(
+    "numu://system/health",
+    name="System health",
+    description=(
+        "Health of the MCP server and its link to the NUMU API: config summary, "
+        "API reachability + latency, token validity, and the audit DB status. "
+        "Read this to diagnose connectivity before blaming a tool."
+    ),
+    mime_type="application/json",
+)
+async def system_health() -> str:
+    import time
+
+    client = get_client()
+    settings = get_settings()
+    health: dict[str, Any] = {
+        "status": "unknown",
+        "config": {
+            "base_url": settings.base_url,
+            "store_id": str(settings.store_id),
+            "transport": settings.transport,
+        },
+        "api": "unknown",
+        "token": "unknown",
+    }
+    try:
+        start = time.monotonic()
+        # plan/usage is a cheap, store-scoped, auth-required call — a good probe.
+        await client.get("plan/usage")
+        health["api"] = "healthy"
+        health["api_latency_ms"] = round((time.monotonic() - start) * 1000, 1)
+        health["token"] = "valid"
+        health["status"] = "healthy"
+    except NumuApiError as exc:
+        health["api"] = "unreachable_or_error"
+        health["error"] = str(exc)
+        health["status"] = "degraded"
+        if "authentication failed" in str(exc).lower():
+            health["token"] = "invalid"
+    return json.dumps(health, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.resource(
+    "numu://audit/recent",
+    name="Recent AI actions",
+    description=(
+        "The audit trail of changes the AI has made to this store (most recent "
+        "first): tool, arguments, outcome, and whether each is still undoable. "
+        "Answers 'what did the AI change?'."
+    ),
+    mime_type="application/json",
+)
+async def recent_audit() -> str:
+    from .audit import get_recent_actions
+
+    settings = get_settings()
+    actions = get_recent_actions(str(settings.store_id), limit=25)
+    return json.dumps({"actions": actions}, indent=2, ensure_ascii=False, default=str)
 
 
 def _price_to_minor(price: Any, currency: str) -> int | None:
