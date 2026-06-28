@@ -96,7 +96,7 @@ async def create_discount(
                     "store_scoped": True,
                 },
             }
-        record_mutation(
+        await record_mutation(
             "create_discount",
             {"code": code, "coupon_type": ctype},
             summary=f"created coupon {code}",
@@ -162,7 +162,7 @@ async def deactivate_discount(coupon_id: str) -> str:
                 "store_scoped": True,
             },
         }
-        record_mutation(
+        await record_mutation(
             "deactivate_discount",
             {"coupon_id": cid},
             summary=f"deactivated coupon {cid}",

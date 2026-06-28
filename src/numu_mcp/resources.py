@@ -269,7 +269,7 @@ async def recent_audit() -> str:
     from .audit import get_recent_actions
 
     settings = get_settings()
-    actions = get_recent_actions(str(settings.store_id), limit=25)
+    actions = await get_recent_actions(str(settings.store_id), limit=25)
     return json.dumps({"actions": actions}, indent=2, ensure_ascii=False, default=str)
 
 

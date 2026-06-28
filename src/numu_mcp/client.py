@@ -82,6 +82,11 @@ class NumuClient:
         self._client = httpx.AsyncClient(
             timeout=settings.timeout,
             verify=settings.verify_ssl,
+            # NUMU routes are defined with a trailing slash (e.g. POST
+            # /stores/{id}/coupons/), so the API 307-redirects the no-slash
+            # form. httpx doesn't follow redirects by default; enable it so
+            # every endpoint works (307/308 preserve method + body).
+            follow_redirects=True,
             headers={
                 "Authorization": f"Bearer {settings.access_token}",
                 "Accept": "application/json",

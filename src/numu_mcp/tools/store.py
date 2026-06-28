@@ -104,7 +104,8 @@ async def list_recent_actions(limit: int = 25) -> str:
 
         store_id = str(get_settings().store_id)
         limit = min(max(int(limit), 1), 100)
-        return dumps({"actions": get_recent_actions(store_id, limit=limit)})
+        actions = await get_recent_actions(store_id, limit=limit)
+        return dumps({"actions": actions})
     except Exception as exc:  # noqa: BLE001
         return err(exc, context={"tool": "list_recent_actions"})
 
@@ -120,12 +121,15 @@ async def undo_last_action() -> str:
         from ..audit import get_undoable_actions, mark_undone
 
         store_id = str(get_settings().store_id)
-        actions = get_undoable_actions(store_id, limit=1)
+        actions = await get_undoable_actions(store_id, limit=1)
         if not actions:
             return "No undoable actions found in the recent history."
 
         last = actions[0]
-        payload = _json.loads(last["undo_payload"])
+        # Both backends return undo_payload as a dict; tolerate a JSON string.
+        payload = last["undo_payload"]
+        if isinstance(payload, str):
+            payload = _json.loads(payload)
         requests = payload.get("requests") or (
             [payload["request"]] if payload.get("request") else []
         )
@@ -147,8 +151,8 @@ async def undo_last_action() -> str:
             except Exception as exc:  # noqa: BLE001
                 errors.append(str(exc))
 
-        mark_undone(last["id"])
-        record_mutation(
+        await mark_undone(last["id"])
+        await record_mutation(
             "undo_last_action",
             {"undone_action_id": last["id"], "undone_tool": last["tool_name"]},
             summary=payload.get("description", ""),

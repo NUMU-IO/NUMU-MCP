@@ -95,7 +95,7 @@ async def create_shipment(
             _shipment_summary(shipment) if isinstance(shipment, dict) else shipment
         )
         sid = shipment.get("id") if isinstance(shipment, dict) else None
-        record_mutation(
+        await record_mutation(
             "create_shipment",
             {"order_id": oid, "carrier": c},
             summary=f"created shipment {sid} for order {oid}",

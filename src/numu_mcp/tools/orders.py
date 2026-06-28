@@ -156,7 +156,7 @@ async def update_order_status(order_id: str, status: str, reason: str | None = N
                     "store_scoped": True,
                 },
             }
-        record_mutation(
+        await record_mutation(
             "update_order_status",
             {"order_id": oid, "status": new_status},
             summary=f"{prev_status} -> {new_status}",
@@ -191,7 +191,7 @@ async def cancel_order(
 
         params = {"reason": reason} if reason else None
         await get_client().delete(f"orders/{oid}", params=params)
-        record_mutation("cancel_order", args, summary=f"cancelled order {oid}")
+        await record_mutation("cancel_order", args, summary=f"cancelled order {oid}")
         return dumps({"cancelled": True, "order_id": oid})
     except Exception as exc:  # noqa: BLE001
         return err(exc, context={"tool": "cancel_order", "order_id": order_id})
@@ -257,7 +257,7 @@ async def refund_order(
             body["amount"] = major_to_minor(amount, currency)
 
         refund = await get_client().post(f"orders/{oid}/refunds", json=body)
-        record_mutation(
+        await record_mutation(
             "refund_order",
             {"order_id": oid, "refund_type": rtype, "reason": rreason},
             summary=f"{rtype} refund created for order {oid}",

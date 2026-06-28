@@ -132,7 +132,7 @@ async def batch_update_order_status(
             else None
         )
         succeeded = sum(1 for r in results if r.get("ok"))
-        record_mutation(
+        await record_mutation(
             "batch_update_order_status",
             {"count": len(ids), "status": new_status},
             summary=f"set {succeeded}/{len(ids)} orders to {new_status}",
@@ -193,7 +193,7 @@ async def batch_adjust_inventory(items: list[dict[str, Any]]) -> str:
             else None
         )
         succeeded = sum(1 for r in results if r.get("ok"))
-        record_mutation(
+        await record_mutation(
             "batch_adjust_inventory",
             {"count": len(results)},
             summary=f"adjusted {succeeded}/{len(results)} products",

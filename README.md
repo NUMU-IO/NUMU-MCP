@@ -100,11 +100,13 @@ through and the backend remains the single source of truth for authorization.
 Beyond CRUD, the server adds a thin layer of *good software engineering* (no
 external AI, no extra services) that makes the assistant safer and smarter:
 
-- **Audit log + undo.** Every change the AI makes is recorded to a local SQLite
-  database (`list_recent_actions`, `numu://audit/recent`). Reversible edits
-  (price/status/stock/coupon, incl. batch) store an *inverse request* so
-  `undo_last_action` can roll them back. Set `NUMU_MCP_DATA_DIR` to control where
-  the DB lives (default `mcp/data/`).
+- **Audit log + undo.** Every change the AI makes is recorded (`list_recent_actions`,
+  `numu://audit/recent`). Reversible edits (price/status/stock/coupon, incl. batch)
+  store an *inverse request* so `undo_last_action` can roll them back. Storage is
+  pluggable via `NUMU_MCP_AUDIT_BACKEND`: **`sqlite`** (default, local file — best
+  for per-merchant/stdio) or **`api`** (durable Postgres written by the NUMU API —
+  use for remote/AWS so the server stays stateless). See
+  [docs/DEPLOY.md](docs/DEPLOY.md).
 - **Confirmation gate.** Irreversible actions (`delete_product`, `refund_order`,
   `cancel_order`) can't run in one step — they return a token, you confirm with
   the user, then re-call with `confirm=<token>`.
@@ -215,6 +217,8 @@ cp .env.example .env
 | `NUMU_MCP_TIMEOUT` | | Request timeout in seconds (default 30). |
 | `NUMU_MCP_VERIFY_SSL` | | `true` (default). Set `false` only for local self-signed certs. |
 | `NUMU_MCP_LOG_LEVEL` | | `INFO` (default). |
+| `NUMU_MCP_AUDIT_BACKEND` | | `sqlite` (default, local file) or `api` (durable Postgres via the NUMU API — use for remote/AWS deployments). |
+| `NUMU_MCP_DATA_DIR` | | Where the SQLite audit DB lives (default `mcp/data/`). Only used when `audit_backend=sqlite`. |
 
 ---
 
@@ -286,6 +290,27 @@ Try: *“Give me today's merchant briefing.”*
 For clients that support remote MCP servers, run with `NUMU_MCP_TRANSPORT=http`
 and point the client at `http://<host>:<port>/mcp`. Put it behind TLS and treat
 the PAT as a secret in transit.
+
+---
+
+## Deploying (Docker / AWS)
+
+For a shared, remote server, build the image and run it in HTTP mode with the
+durable audit backend:
+
+```bash
+docker build -t numu-mcp .
+docker run -p 8765:8765 \
+  -e NUMU_MCP_BASE_URL=https://mystore.numueg.app \
+  -e NUMU_MCP_STORE_ID=<STORE_UUID> \
+  -e NUMU_MCP_ACCESS_TOKEN=numu_pat_xxx \
+  -e NUMU_MCP_AUDIT_BACKEND=api \
+  numu-mcp
+```
+
+In `api` audit mode the container is **stateless** (no disk, no DB credentials),
+so it scales horizontally. Full AWS ECS/Fargate walkthrough (ECR, Secrets
+Manager, ALB, health checks) is in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ---
 

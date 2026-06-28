@@ -186,7 +186,7 @@ async def create_product(
         product = await get_client().post("products", json=body)
         summary = _product_summary(product) if isinstance(product, dict) else product
         new_id = product.get("id") if isinstance(product, dict) else None
-        record_mutation(
+        await record_mutation(
             "create_product",
             {"name": body["name"], "price": price},
             summary=f"created product {new_id}",
@@ -290,7 +290,7 @@ async def update_product(
 
         product = await get_client().patch(f"products/{pid}", json=body)
         summary = _product_summary(product) if isinstance(product, dict) else product
-        record_mutation(
+        await record_mutation(
             "update_product",
             {"product_id": pid, "fields": list(body)},
             summary=f"updated {list(body)} on product {pid}",
@@ -320,7 +320,7 @@ async def delete_product(product_id: str, confirm: str | None = None) -> str:
         if not consume_token(confirm, "delete_product", args):
             return "Confirmation token is invalid or expired. Re-run delete_product to get a new one."
         await get_client().delete(f"products/{pid}")
-        record_mutation("delete_product", args, summary=f"deleted product {pid}")
+        await record_mutation("delete_product", args, summary=f"deleted product {pid}")
         return dumps({"deleted": True, "product_id": pid})
     except Exception as exc:  # noqa: BLE001
         return err(exc, context={"tool": "delete_product", "product_id": product_id})

@@ -52,7 +52,7 @@ def err(exc: Exception, context: dict[str, Any] | None = None) -> str:
     return base + ("\n" + "\n".join(hints) if hints else "")
 
 
-def record_mutation(
+async def record_mutation(
     tool_name: str,
     arguments: dict[str, Any],
     *,
@@ -69,7 +69,7 @@ def record_mutation(
         store_id = str(get_settings().store_id)
     except Exception:  # noqa: BLE001
         store_id = "unknown"
-    log_action(
+    await log_action(
         store_id=store_id,
         tool_name=tool_name,
         arguments=arguments,

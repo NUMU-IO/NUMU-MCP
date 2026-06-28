@@ -111,7 +111,7 @@ async def adjust_inventory(
                 "store_scoped": True,
             },
         }
-        record_mutation(
+        await record_mutation(
             "adjust_inventory",
             {"product_id": pid, "adjustment": adjustment},
             summary=f"adjusted {pid} by {adjustment}",

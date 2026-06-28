@@ -69,6 +69,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    audit_backend: str = Field(
+        default="sqlite",
+        description=(
+            "Where the audit/undo trail is stored: 'sqlite' (local file, best "
+            "for per-merchant/stdio use) or 'api' (durable Postgres via the NUMU "
+            "API — required for stateless/remote deployments like AWS)."
+        ),
+    )
+
     @field_validator("base_url")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
@@ -89,6 +98,16 @@ class Settings(BaseSettings):
         if v in {"stdio", "local"}:
             return "stdio"
         raise ValueError("transport must be 'stdio' or 'http'")
+
+    @field_validator("audit_backend")
+    @classmethod
+    def _normalize_audit_backend(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v in {"sqlite", "local"}:
+            return "sqlite"
+        if v in {"api", "postgres", "remote"}:
+            return "api"
+        raise ValueError("audit_backend must be 'sqlite' or 'api'")
 
     @field_validator("access_token")
     @classmethod

@@ -1,0 +1,20 @@
+# Local run of the NUMU MCP server in remote (HTTP) mode.
+#   NUMU_MCP_BASE_URL=… NUMU_MCP_STORE_ID=… NUMU_MCP_ACCESS_TOKEN=… docker compose up
+# Then point an MCP client at http://localhost:8765/mcp
+services:
+  numu-mcp:
+    build: .
+    image: numu-mcp:latest
+    ports:
+      - "8765:8765"
+    environment:
+      NUMU_MCP_BASE_URL: ${NUMU_MCP_BASE_URL}
+      NUMU_MCP_STORE_ID: ${NUMU_MCP_STORE_ID}
+      NUMU_MCP_ACCESS_TOKEN: ${NUMU_MCP_ACCESS_TOKEN}
+      NUMU_MCP_TRANSPORT: http
+      NUMU_MCP_HOST: 0.0.0.0
+      NUMU_MCP_PORT: "8765"
+      # Durable audit via the NUMU API (stateless container). Use "sqlite" only
+      # if you mount a persistent volume at /app/data.
+      NUMU_MCP_AUDIT_BACKEND: api
+    restart: unless-stopped
