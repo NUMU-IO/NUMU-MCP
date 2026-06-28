@@ -10,6 +10,9 @@ bounded by the merchant's own permissions and plan.
 Built with the official **MCP Python SDK** (FastMCP) so it stays consistent with
 the FastAPI backend it talks to. No Node.js required.
 
+> 📖 For a deep, end-to-end architecture walkthrough (request lifecycle, auth,
+> plan-awareness, extending the server), see **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**.
+
 ---
 
 ## How it works
