@@ -1,0 +1,137 @@
+name: CD Prod (EC2)
+
+# Build the NUMU MCP server image and deploy it to the prod EC2 (shared with
+# the storefront) behind mcp.numueg.app.
+#
+# Promotion model (same box conventions as numu-storefront's cd-prod):
+#   * push to `main` touching runtime code → auto build + deploy
+#   * workflow_dispatch → manual promote / redeploy / rollback valve
+#
+# Required repo secrets (same key pair as the storefront box):
+#   PROD_EC2_HOST      54.155.67.253 (storefront EC2)
+#   PROD_EC2_USER      ec2-user
+#   PROD_EC2_SSH_KEY   private key for the numu-store key pair
+#
+# Storefront safety: the container deploys with hard caps (384M / 0.5 vCPU),
+# publishes no host ports, and nginx routing uses a lazily-resolved upstream —
+# a broken MCP deploy can 502 mcp.numueg.app but can never take down or slow
+# the storefront. The post-deploy smoke test asserts both MCP liveness AND
+# storefront health.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "deploy/**"
+      - "scripts/deploy-mcp-ec2.sh"
+      - ".github/workflows/cd-prod.yml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: numu-io/numu-mcp
+  REMOTE_DIR: /opt/numu-mcp
+
+jobs:
+  # ===========================================================================
+  # Build + push the prod image to GHCR (tagged prod + commit SHA).
+  # ===========================================================================
+  build-and-push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=prod
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Deploy to the prod EC2 (storefront box) behind mcp.numueg.app.
+  # ===========================================================================
+  deploy-prod:
+    name: Deploy MCP to prod EC2
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Sync deploy assets to EC2
+        run: |
+          U="${{ secrets.PROD_EC2_USER }}"; H="${{ secrets.PROD_EC2_HOST }}"
+          ssh -i ~/.ssh/deploy_key "$U@$H" "mkdir -p ${REMOTE_DIR}/deploy ${REMOTE_DIR}/scripts"
+          scp -i ~/.ssh/deploy_key deploy/docker-compose.mcp.ec2.yml "$U@$H:${REMOTE_DIR}/deploy/"
+          scp -i ~/.ssh/deploy_key scripts/deploy-mcp-ec2.sh          "$U@$H:${REMOTE_DIR}/scripts/"
+
+      - name: Deploy
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:prod
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.PROD_EC2_USER }}@${{ secrets.PROD_EC2_HOST }} << DEPLOY
+            set -e
+            cd ${REMOTE_DIR}
+            echo "==> docker login ghcr.io"
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+            chmod +x scripts/deploy-mcp-ec2.sh
+            export NUMU_MCP_IMAGE="${IMAGE_REF}"
+            ./scripts/deploy-mcp-ec2.sh
+            docker logout ghcr.io || true
+          DEPLOY
+
+      # -----------------------------------------------------------------------
+      # Smoke test THROUGH Cloudflare: MCP must answer (401 without auth is the
+      # designed response) and the storefront must still be healthy.
+      # -----------------------------------------------------------------------
+      - name: Smoke test (MCP up + storefront unaffected)
+        run: |
+          set -e
+          mcp_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST \
+            -H "Content-Type: application/json" -d '{}' https://mcp.numueg.app/mcp)
+          echo "MCP no-auth POST -> $mcp_code (expect 401)"
+          [ "$mcp_code" = "401" ] || { echo "!! MCP endpoint not answering as expected"; exit 1; }
+
+          sf_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://sawsaw.numueg.app/)
+          sf_ttfb=$(curl -s -o /dev/null -w "%{time_starttransfer}" --max-time 20 https://sawsaw.numueg.app/)
+          echo "Storefront sawsaw -> $sf_code (ttfb ${sf_ttfb}s)"
+          [ "$sf_code" = "200" ] || { echo "!! storefront regressed"; exit 1; }

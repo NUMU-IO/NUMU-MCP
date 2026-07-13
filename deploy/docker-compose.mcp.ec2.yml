@@ -1,0 +1,65 @@
+# =============================================================================
+# NUMU MCP server — prod EC2 (shares the storefront box)  ·  mcp.numueg.app
+# =============================================================================
+# Multi-tenant pass-through mode: NO token/store env — every request carries
+# its own 'Authorization: Bearer numu_pat_...' which is forwarded to NUMU-api.
+# The container holds no credentials and no state (audit goes to the API).
+#
+# STOREFRONT-SAFETY (this box's primary job is the storefront):
+#   * hard caps: 384 MiB RAM / 0.5 vCPU — the kernel throttles MCP before it
+#     can starve the storefront (1200M) or n8n (1G)
+#   * no host ports — only reachable through the storefront nginx via the
+#     shared `edge` network, so no port conflicts are possible
+#   * nginx resolves the upstream lazily (`set $mcp ...`), so a stopped MCP
+#     container can never break storefront traffic
+#
+# Deploy:  NUMU_MCP_IMAGE=ghcr.io/numu-io/numu-mcp:prod scripts/deploy-mcp-ec2.sh
+# =============================================================================
+
+name: numu-mcp-prod
+
+services:
+  mcp:
+    image: ${NUMU_MCP_IMAGE:?NUMU_MCP_IMAGE must be set (e.g. ghcr.io/numu-io/numu-mcp:prod)}
+    container_name: numu-mcp-prod
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: eu-west-1
+        awslogs-group: /numu/prod/mcp
+        awslogs-create-group: "true"
+        awslogs-stream: mcp
+        mode: non-blocking
+        max-buffer-size: 4m
+    environment:
+      # Hosted multi-tenant pass-through: transport=http with NO access token.
+      - NUMU_MCP_TRANSPORT=http
+      - NUMU_MCP_BASE_URL=https://numueg.app
+      - NUMU_MCP_HOST=0.0.0.0
+      - NUMU_MCP_PORT=8765
+      - NUMU_MCP_AUDIT_BACKEND=api
+      - NUMU_MCP_LOG_LEVEL=INFO
+    expose:
+      - "8765"
+    networks:
+      - edge
+    healthcheck:
+      # Socket liveness (the /mcp endpoint 401s without auth by design).
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.50"
+
+networks:
+  # Join the storefront's existing edge network so its nginx can proxy
+  # mcp.numueg.app → numu-mcp-prod:8765 by container name.
+  edge:
+    external: true
+    name: numu-storefront-prod_edge
