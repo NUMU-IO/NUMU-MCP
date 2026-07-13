@@ -31,13 +31,28 @@ def _purge_expired() -> None:
         _pending.pop(tok, None)
 
 
+def _issuing_store() -> str:
+    """The store the token belongs to — multi-tenant tokens must not cross."""
+    try:
+        from .runtime import current_store_id
+
+        return current_store_id()
+    except Exception:  # noqa: BLE001
+        return "default"
+
+
 def issue_token(tool_name: str, arguments: dict[str, Any]) -> str:
     """Create and store a one-time confirmation token for an action."""
     _purge_expired()
-    # Vary the token by tool, args and a monotonic stamp so it's unique.
-    seed = f"{tool_name}:{json.dumps(arguments, sort_keys=True, default=str)}:{time.monotonic()}"
+    store = _issuing_store()
+    # Vary the token by store, tool, args and a monotonic stamp so it's unique.
+    seed = (
+        f"{store}:{tool_name}:"
+        f"{json.dumps(arguments, sort_keys=True, default=str)}:{time.monotonic()}"
+    )
     token = hashlib.sha256(seed.encode()).hexdigest()[:16]
     _pending[token] = {
+        "store": store,
         "tool_name": tool_name,
         "arguments": arguments,
         "expires_at": time.monotonic() + _TTL_SECONDS,
@@ -50,6 +65,8 @@ def consume_token(token: str, tool_name: str, arguments: dict[str, Any]) -> bool
     _purge_expired()
     action = _pending.get(token)
     if action is None:
+        return False
+    if action.get("store", "default") != _issuing_store():
         return False
     if action["tool_name"] != tool_name:
         return False

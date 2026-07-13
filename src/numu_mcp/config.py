@@ -31,11 +31,23 @@ class Settings(BaseSettings):
             "prefix is added automatically; do not include it here."
         ),
     )
-    store_id: UUID = Field(
-        description="The store's UUID. All operations target this single store.",
+    store_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The store's UUID (single-tenant mode). All operations target this "
+            "single store. Omit in hosted multi-tenant mode, where the store is "
+            "resolved per-request from the caller's token."
+        ),
     )
-    access_token: str = Field(
-        description="A NUMU Personal Access Token (starts with 'numu_pat_').",
+    access_token: str | None = Field(
+        default=None,
+        description=(
+            "A NUMU Personal Access Token (starts with 'numu_pat_') for "
+            "single-tenant mode. Omit (with transport=http) to run the hosted "
+            "multi-tenant server: each request must then carry its own "
+            "'Authorization: Bearer numu_pat_…' header, which is forwarded to "
+            "NUMU-api per-request (pass-through auth)."
+        ),
     )
 
     # ── HTTP behaviour ────────────────────────────────────────────────────
@@ -111,11 +123,16 @@ class Settings(BaseSettings):
 
     @field_validator("access_token")
     @classmethod
-    def _check_token(cls, v: str) -> str:
+    def _check_token(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         v = v.strip()
-        if not v:
-            raise ValueError("access_token must not be empty")
-        return v
+        return v or None
+
+    @property
+    def is_multi_tenant(self) -> bool:
+        """Hosted pass-through mode: HTTP transport with no env token."""
+        return self.transport == "streamable-http" and self.access_token is None
 
     @property
     def resolved_data_dir(self) -> str:

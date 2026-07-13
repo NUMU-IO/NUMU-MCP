@@ -6,13 +6,12 @@ These make the server self-describing — the AI can ask what it's allowed to do
 
 from __future__ import annotations
 
-from typing import Any
-
 import json as _json
+from typing import Any
 
 from ..app import mcp
 from ..capabilities import TOOL_REQUIREMENTS, probe
-from ..runtime import get_client, get_settings
+from ..runtime import current_store_id, get_client
 from ._base import dumps, err, record_mutation
 
 
@@ -102,7 +101,7 @@ async def list_recent_actions(limit: int = 25) -> str:
     try:
         from ..audit import get_recent_actions
 
-        store_id = str(get_settings().store_id)
+        store_id = current_store_id()
         limit = min(max(int(limit), 1), 100)
         actions = await get_recent_actions(store_id, limit=limit)
         return dumps({"actions": actions})
@@ -120,7 +119,7 @@ async def undo_last_action() -> str:
     try:
         from ..audit import get_undoable_actions, mark_undone
 
-        store_id = str(get_settings().store_id)
+        store_id = current_store_id()
         actions = await get_undoable_actions(store_id, limit=1)
         if not actions:
             return "No undoable actions found in the recent history."

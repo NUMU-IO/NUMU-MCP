@@ -14,15 +14,14 @@ import sys
 
 from pydantic import ValidationError
 
-from .app import mcp
-from .client import NumuClient
-from .config import load_settings
-from .runtime import init_runtime
-
 # Importing these modules registers all resources, tools and prompts on `mcp`.
 from . import prompts as _prompts  # noqa: E402,F401
 from . import resources as _resources  # noqa: E402,F401
 from . import tools as _tools  # noqa: E402,F401
+from .app import mcp
+from .client import NumuClient
+from .config import load_settings
+from .runtime import init_runtime
 
 
 def _fail(message: str) -> None:
@@ -50,6 +49,20 @@ def main() -> None:
         )
         return
 
+    # Single-tenant modes still require the env-configured identity. (In
+    # multi-tenant HTTP mode both come from each request's bearer token.)
+    if not settings.is_multi_tenant and (
+        settings.store_id is None or settings.access_token is None
+    ):
+        _fail(
+            "Single-tenant mode needs NUMU_MCP_STORE_ID and "
+            "NUMU_MCP_ACCESS_TOKEN (see .env.example). To run the hosted "
+            "multi-tenant server instead, set NUMU_MCP_TRANSPORT=http and "
+            "leave NUMU_MCP_ACCESS_TOKEN unset — every request must then "
+            "carry its own 'Authorization: Bearer numu_pat_…' header."
+        )
+        return
+
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         stream=sys.stderr,
@@ -67,7 +80,26 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("numu-mcp").warning("audit db init failed: %s", exc)
 
-    if settings.transport == "streamable-http":
+    if settings.is_multi_tenant:
+        # Hosted mode: one deployment serves every store. Stateless HTTP so
+        # any request can land on any replica; per-request auth is enforced by
+        # the pass-through middleware, which forwards the caller's token to
+        # NUMU-api (the source of truth for scopes + store binding).
+        import uvicorn
+
+        from .tenancy import PassthroughAuthMiddleware
+
+        mcp.settings.stateless_http = True
+        app = PassthroughAuthMiddleware(
+            mcp.streamable_http_app(), api_base=settings.api_base
+        )
+        logging.getLogger("numu-mcp").info(
+            "Starting NUMU MCP server (HTTP, multi-tenant pass-through) on %s:%s",
+            settings.host,
+            settings.port,
+        )
+        uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+    elif settings.transport == "streamable-http":
         mcp.settings.host = settings.host
         mcp.settings.port = settings.port
         logging.getLogger("numu-mcp").info(

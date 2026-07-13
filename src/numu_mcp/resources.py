@@ -13,7 +13,7 @@ from typing import Any
 from .app import mcp
 from .client import NumuApiError
 from .formatting import money
-from .runtime import get_client, get_settings
+from .runtime import current_store_id, get_client, get_settings
 
 
 async def _safe(coro: Any) -> Any:
@@ -49,11 +49,10 @@ def _total_from_list(payload: Any) -> int | None:
 )
 async def store_overview() -> str:
     client = get_client()
-    settings = get_settings()
 
     store = await _safe(
         client.request(
-            "GET", f"stores/{settings.store_id}", store_scoped=False, cache_ttl=120
+            "GET", f"stores/{current_store_id()}", store_scoped=False, cache_ttl=120
         )
     )
     currency = "EGP"
@@ -131,11 +130,10 @@ async def store_overview() -> str:
 )
 async def product_catalog() -> str:
     client = get_client()
-    settings = get_settings()
 
     store = await _safe(
         client.request(
-            "GET", f"stores/{settings.store_id}", store_scoped=False, cache_ttl=120
+            "GET", f"stores/{current_store_id()}", store_scoped=False, cache_ttl=120
         )
     )
     currency = (
@@ -232,7 +230,7 @@ async def system_health() -> str:
         "status": "unknown",
         "config": {
             "base_url": settings.base_url,
-            "store_id": str(settings.store_id),
+            "store_id": current_store_id(),
             "transport": settings.transport,
         },
         "api": "unknown",
@@ -268,8 +266,7 @@ async def system_health() -> str:
 async def recent_audit() -> str:
     from .audit import get_recent_actions
 
-    settings = get_settings()
-    actions = await get_recent_actions(str(settings.store_id), limit=25)
+    actions = await get_recent_actions(current_store_id(), limit=25)
     return json.dumps({"actions": actions}, indent=2, ensure_ascii=False, default=str)
 
 
