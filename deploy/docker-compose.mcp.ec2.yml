@@ -40,6 +40,9 @@ services:
       - NUMU_MCP_PORT=8765
       - NUMU_MCP_AUDIT_BACKEND=api
       - NUMU_MCP_LOG_LEVEL=INFO
+      # Public host behind nginx/Cloudflare — allow-listed so the SDK's
+      # DNS-rebinding guard doesn't 400 with "Invalid Host header".
+      - NUMU_MCP_ALLOWED_HOSTS=mcp.numueg.app,mcp.numueg.app:*
     expose:
       - "8765"
     networks:

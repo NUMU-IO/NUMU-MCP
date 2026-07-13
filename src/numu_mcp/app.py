@@ -6,7 +6,32 @@ without creating an import cycle with ``server.py``.
 
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+
+
+def _transport_security() -> TransportSecuritySettings:
+    """DNS-rebinding guard config for HTTP transport.
+
+    The SDK's guard rejects any request whose Host header isn't allow-listed
+    with "Invalid Host header" — which fires in production because the public
+    Host (mcp.numueg.app) isn't localhost. Behind a trusted reverse proxy the
+    fix is to allow-list the real host(s) via NUMU_MCP_ALLOWED_HOSTS
+    (comma-separated; ":*" suffix matches any port). localhost is always kept
+    so stdio/local HTTP testing works unchanged. Origins are only checked when
+    present, so server-side clients (Claude, ChatGPT connectors) need none;
+    add browser origins via NUMU_MCP_ALLOWED_ORIGINS if ever required.
+    """
+    hosts = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"]
+    hosts += [h.strip() for h in os.environ.get("NUMU_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    origins = [o.strip() for o in os.environ.get("NUMU_MCP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
 
 INSTRUCTIONS = """\
 You are operating a single NUMU merchant store as a trusted, embedded assistant.
@@ -46,4 +71,8 @@ How to work effectively:
   at once. Check `numu://system/health` if calls start failing.
 """
 
-mcp = FastMCP(name="numu", instructions=INSTRUCTIONS)
+mcp = FastMCP(
+    name="numu",
+    instructions=INSTRUCTIONS,
+    transport_security=_transport_security(),
+)
