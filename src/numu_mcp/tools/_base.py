@@ -64,9 +64,9 @@ async def record_mutation(
     from ..audit import log_action
 
     try:
-        from ..runtime import get_settings
+        from ..runtime import current_store_id
 
-        store_id = str(get_settings().store_id)
+        store_id = current_store_id()
     except Exception:  # noqa: BLE001
         store_id = "unknown"
     await log_action(

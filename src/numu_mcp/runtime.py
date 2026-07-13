@@ -30,3 +30,15 @@ def get_settings() -> Settings:
     if _settings is None:
         raise RuntimeError("Runtime not initialised — call init_runtime() first.")
     return _settings
+
+
+def current_store_id() -> str:
+    """The store this request targets.
+
+    Multi-tenant mode: the store bound to the caller's token (set per-request
+    by the pass-through middleware). Single-tenant mode: the env-configured
+    store.
+    """
+    from . import tenancy
+
+    return tenancy.current_store_id() or str(get_settings().store_id)

@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from . import tenancy
 from .config import Settings
 
 
@@ -79,6 +80,15 @@ class NumuClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "numu-mcp/0.1",
+        }
+        # Single-tenant: one env-configured token for the process lifetime.
+        # Multi-tenant: no static header — each request forwards the caller's
+        # token (see _auth_headers / tenancy).
+        if settings.access_token:
+            headers["Authorization"] = f"Bearer {settings.access_token}"
         self._client = httpx.AsyncClient(
             timeout=settings.timeout,
             verify=settings.verify_ssl,
@@ -87,19 +97,26 @@ class NumuClient:
             # form. httpx doesn't follow redirects by default; enable it so
             # every endpoint works (307/308 preserve method + body).
             follow_redirects=True,
-            headers={
-                "Authorization": f"Bearer {settings.access_token}",
-                "Accept": "application/json",
-                "User-Agent": "numu-mcp/0.1",
-            },
+            headers=headers,
         )
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def _effective_store_id(self) -> str:
+        """The store of the current request (multi-tenant) or the env store."""
+        return tenancy.current_store_id() or str(self._settings.store_id)
+
+    def _auth_headers(self) -> dict[str, str] | None:
+        """Per-request Authorization override in multi-tenant mode."""
+        token = tenancy.current_token()
+        if token is not None:
+            return {"Authorization": f"Bearer {token}"}
+        return None
+
     def _url(self, path: str, *, store_scoped: bool) -> str:
         base = (
-            self._settings.store_api_base
+            f"{self._settings.api_base}/stores/{self._effective_store_id()}"
             if store_scoped
             else self._settings.api_base
         )
@@ -134,14 +151,29 @@ class NumuClient:
         if use_cache:
             from . import cache as _cache
 
-            cache_key = f"{self._settings.store_id}:{url}:{clean_params}"
+            cache_key = f"{self._effective_store_id()}:{url}:{clean_params}"
             cached = _cache.get(cache_key)
             if cached is not None:
                 return cached
         try:
             response = await self._client.request(
-                method, url, params=clean_params, json=json
+                method, url, params=clean_params, json=json, headers=self._auth_headers()
             )
+            # NUMU-api no longer 307-redirects between /path and /path/ —
+            # collection routes require the trailing slash while detail routes
+            # reject it. Rather than encode that per-endpoint, retry a 404
+            # once with the slash toggled.
+            if response.status_code == 404:
+                toggled = url[:-1] if url.endswith("/") else url + "/"
+                retry = await self._client.request(
+                    method,
+                    toggled,
+                    params=clean_params,
+                    json=json,
+                    headers=self._auth_headers(),
+                )
+                if retry.status_code != 404:
+                    response = retry
         except httpx.TimeoutException as exc:
             raise NumuApiError(
                 f"The NUMU API did not respond within {self._settings.timeout:.0f}s."

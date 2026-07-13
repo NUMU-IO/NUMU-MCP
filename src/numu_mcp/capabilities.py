@@ -137,23 +137,33 @@ def _domains_from_permissions(perms: Any) -> tuple[set[str], set[str]]:
 
 
 class CapabilityProbe:
-    """Loads and caches the store's live capabilities."""
+    """Loads and caches live capabilities, keyed per store (multi-tenant safe)."""
 
     def __init__(self) -> None:
-        self._cache: Capabilities | None = None
-        self._fetched_at: float = 0.0
+        self._cache: dict[str, tuple[Capabilities, float]] = {}
 
     def invalidate(self) -> None:
-        self._cache = None
+        self._cache.clear()
+
+    @staticmethod
+    def _store_key() -> str:
+        from .runtime import current_store_id
+
+        try:
+            return current_store_id()
+        except Exception:  # noqa: BLE001 - never let cache keying break a probe
+            return "default"
 
     async def get(self, *, force: bool = False) -> Capabilities:
         # Note: time.monotonic is allowed and fine for a TTL.
+        key = self._store_key()
+        hit = self._cache.get(key)
         if (
             not force
-            and self._cache is not None
-            and (time.monotonic() - self._fetched_at) < _CACHE_TTL_SECONDS
+            and hit is not None
+            and (time.monotonic() - hit[1]) < _CACHE_TTL_SECONDS
         ):
-            return self._cache
+            return hit[0]
 
         caps = Capabilities()
         client = get_client()
@@ -183,8 +193,7 @@ class CapabilityProbe:
         except NumuApiError as exc:
             caps.notes.append(f"permissions unavailable: {exc}")
 
-        self._cache = caps
-        self._fetched_at = time.monotonic()
+        self._cache[key] = (caps, time.monotonic())
         return caps
 
 
