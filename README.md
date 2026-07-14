@@ -53,6 +53,8 @@ the FastAPI backend it talks to. No Node.js required.
 | Domain | Tools |
 |--------|-------|
 | **Store / plan / audit** | `get_capabilities`, `refresh_capabilities`, `get_plan_and_usage`, `list_categories`, `list_recent_actions`, `undo_last_action` |
+| **Categories / collections** | `create_category`, `update_category`, `delete_category` |
+| **Theme engine (V3)** | `get_theme`, `update_theme_global_settings`, `patch_theme_draft`, `publish_theme`, `discard_theme_changes` |
 | **Intelligence** | `analyze_customer_segments` (RFM), `analyze_inventory_health` (days-of-cover), `suggest_price_adjustments` |
 | **Batch** | `batch_get_orders`, `batch_get_products`, `batch_update_order_status`, `batch_adjust_inventory` |
 | **Orders** | `list_orders`, `get_order`, `update_order_status`, `cancel_order`, `refund_order` |
