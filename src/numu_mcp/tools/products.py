@@ -34,6 +34,8 @@ _UNDOABLE_FIELDS = (
     "status",
     "tags",
     "images",
+    "seo_title",
+    "seo_description",
 )
 _NUMERIC_FIELDS = {"price", "compare_at_price", "cost_price"}
 
@@ -211,6 +213,8 @@ async def update_product(
     status: str | None = None,
     tags: list[str] | None = None,
     images: list[str] | None = None,
+    seo_title: str | None = None,
+    seo_description: str | None = None,
 ) -> str:
     """Update fields on an existing product. Only provided fields are changed.
 
@@ -228,6 +232,8 @@ async def update_product(
         status: draft, active, or archived.
         tags: Replace tags with this list.
         images: Replace images with this list.
+        seo_title: SEO page title override (max 70 chars; API-enforced).
+        seo_description: SEO meta description (max 160 chars; API-enforced).
     """
     try:
         pid = validate_uuid(product_id, "product_id")
@@ -256,6 +262,10 @@ async def update_product(
             body["tags"] = tags
         if images is not None:
             body["images"] = images
+        if seo_title is not None:
+            body["seo_title"] = seo_title
+        if seo_description is not None:
+            body["seo_description"] = seo_description
         if not body:
             from ..formatting import ValidationError
 
