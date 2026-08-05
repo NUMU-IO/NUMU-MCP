@@ -36,6 +36,7 @@ _UNDOABLE_FIELDS = (
     "images",
     "seo_title",
     "seo_description",
+    "attributes",
 )
 _NUMERIC_FIELDS = {"price", "compare_at_price", "cost_price"}
 
@@ -215,6 +216,7 @@ async def update_product(
     images: list[str] | None = None,
     seo_title: str | None = None,
     seo_description: str | None = None,
+    attributes: dict[str, Any] | None = None,
 ) -> str:
     """Update fields on an existing product. Only provided fields are changed.
 
@@ -234,6 +236,9 @@ async def update_product(
         images: Replace images with this list.
         seo_title: SEO page title override (max 70 chars; API-enforced).
         seo_description: SEO meta description (max 160 chars; API-enforced).
+        attributes: Replace the FULL attributes object (advanced). Always
+            fetch the product first and pass a modified copy — variants and
+            other metadata live in here and a partial dict would drop them.
     """
     try:
         pid = validate_uuid(product_id, "product_id")
@@ -266,6 +271,8 @@ async def update_product(
             body["seo_title"] = seo_title
         if seo_description is not None:
             body["seo_description"] = seo_description
+        if attributes is not None:
+            body["attributes"] = attributes
         if not body:
             from ..formatting import ValidationError
 

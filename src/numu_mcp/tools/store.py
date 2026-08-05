@@ -170,6 +170,64 @@ async def undo_last_action() -> str:
 
 
 @mcp.tool()
+async def update_store_info(
+    description: str | None = None,
+    name: str | None = None,
+) -> str:
+    """Update the store's public profile fields.
+
+    These render in the storefront header, the meta/OG description, and the
+    JSON-LD structured data on every page — customer- and crawler-facing.
+
+    Args:
+        description: New public store description.
+        name: New public store display name.
+    """
+    try:
+        body: dict[str, Any] = {}
+        if description is not None:
+            body["description"] = description
+        if name is not None:
+            body["name"] = name
+        if not body:
+            from ..formatting import ValidationError
+
+            raise ValidationError("Provide at least one field to update.")
+        client = get_client()
+        sid = current_store_id()
+        before = await client.request("GET", f"stores/{sid}", store_scoped=False)
+        undo = None
+        if isinstance(before, dict):
+            restore = {k: before.get(k) for k in body}
+            undo = {
+                "description": f"Restore store fields {list(restore)}",
+                "request": {
+                    "method": "PATCH",
+                    "path": f"stores/{sid}",
+                    "json": restore,
+                    "store_scoped": False,
+                },
+            }
+        store = await client.request(
+            "PATCH", f"stores/{sid}", store_scoped=False, json=body
+        )
+        out = (
+            {k: store.get(k) for k in ("id", "name", "description")}
+            if isinstance(store, dict)
+            else store
+        )
+        await record_mutation(
+            "update_store_info",
+            {"fields": list(body)},
+            summary=f"updated store fields {list(body)}",
+            undo=undo,
+        )
+        return dumps({"updated": True, "store": out})
+    except Exception as exc:  # noqa: BLE001
+        return err(exc, context={"tool": "update_store_info"})
+
+
+@mcp.tool()
 async def list_categories(include_inactive: bool = False) -> str:
     """List the store's product categories (useful when creating/updating
     products and assigning a category_id).
