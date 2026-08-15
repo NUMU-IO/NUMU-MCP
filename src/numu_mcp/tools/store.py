@@ -79,6 +79,20 @@ async def refresh_capabilities() -> str:
 
 _ORDER_STATUS_TRIGGERS = ("confirmed", "processing", "shipped", "delivered")
 
+
+async def _read_meta_tracking() -> dict[str, Any]:
+    """Current ``tracking.meta`` config.
+
+    Read via ``GET settings/tracking`` (the whole tracking envelope) — the
+    API exposes only PUT and DELETE at ``settings/tracking/meta``, so a GET
+    there answers 405, and the client's slash-retry only covers 404.
+    """
+    envelope = await get_client().get("settings/tracking")
+    if not isinstance(envelope, dict):
+        return {}
+    meta = envelope.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
 # Fields echoed back on the PUT so a partial edit doesn't blank them. The
 # endpoint replaces the whole ``tracking.meta`` config, so anything omitted
 # reverts to its schema default — that is how a store ends up with
@@ -112,8 +126,7 @@ async def get_meta_tracking() -> str:
     returned.
     """
     try:
-        cfg = await get_client().get("settings/tracking/meta")
-        return dumps(cfg)
+        return dumps(await _read_meta_tracking())
     except Exception as exc:  # noqa: BLE001
         return err(exc, context={"tool": "get_meta_tracking"})
 
@@ -158,8 +171,8 @@ async def update_meta_tracking(
                 )
 
         client = get_client()
-        current = await client.get("settings/tracking/meta")
-        if not isinstance(current, dict):
+        current = await _read_meta_tracking()
+        if not current:
             raise ValidationError("Could not read current Meta tracking settings.")
         if not current.get("pixel_id"):
             raise ValidationError(
