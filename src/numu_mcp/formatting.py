@@ -48,6 +48,14 @@ REFUND_REASONS = (
     "duplicate_order",
     "other",
 )
+# Fallback carrier list. The API's carrier registry
+# (application/services/carrier_registry.py) is the source of truth and is
+# fetched at runtime by `numu_mcp.carriers.known_carriers()`; this tuple is
+# only used when that fetch fails, so the tools keep working offline.
+#
+# It must stay a SUPERSET-free mirror of the registry: listing a carrier
+# here that the API does not have would let a tool submit a slug the API
+# rejects with 400.
 SHIPMENT_CARRIERS = ("bosta", "mylerz", "jt")
 INVENTORY_FILTERS = ("all", "low_stock", "out_of_stock")
 

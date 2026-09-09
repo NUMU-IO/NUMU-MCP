@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..app import mcp
+from ..carriers import known_carriers
 from ..formatting import (
-    SHIPMENT_CARRIERS,
     money,
     validate_choice,
     validate_uuid,
@@ -256,7 +256,7 @@ async def list_shipments(
     Args:
         status: Filter by shipment status (e.g. created, in_transit, delivered,
             cancelled, returned).
-        carrier: Filter by carrier: bosta, mylerz, or jt.
+        carrier: Filter by carrier slug. See `list_shipment_carriers`.
         order_id: Show shipments for a specific order (UUID).
         skip: Offset for pagination.
         limit: Page size, 1-100.
@@ -266,7 +266,9 @@ async def list_shipments(
         if status:
             params["status"] = status
         if carrier:
-            params["carrier"] = validate_choice(carrier, SHIPMENT_CARRIERS, "carrier")
+            params["carrier"] = validate_choice(
+                carrier, await known_carriers(), "carrier"
+            )
         if order_id:
             params["order_id"] = validate_uuid(order_id, "order_id")
         payload = await get_client().get("shipments", params=params)
@@ -279,9 +281,39 @@ async def list_shipments(
 
 
 @mcp.tool()
+async def list_shipment_carriers() -> str:
+    """List the shipping carriers this store can book with.
+
+    Returns each carrier's slug, bilingual name and declared capabilities.
+    Check this before `create_shipment` rather than guessing a slug, and
+    before promising an action: carriers differ in what they support, so
+    cancelling or printing a waybill works for some and not others.
+    """
+    try:
+        payload = await get_client().get("shipments/carriers")
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        carriers = [
+            {
+                "slug": c.get("slug"),
+                "name_en": c.get("name_en"),
+                "name_ar": c.get("name_ar"),
+                "tier": c.get("tier"),
+                "is_default": c.get("is_default"),
+                "capabilities": c.get("capabilities") or {},
+                "supported_operations": c.get("supported_operations") or [],
+            }
+            for c in (data or [])
+            if isinstance(c, dict)
+        ]
+        return dumps({"count": len(carriers), "carriers": carriers})
+    except Exception as exc:  # noqa: BLE001
+        return err(exc)
+
+
+@mcp.tool()
 async def create_shipment(
     order_id: str,
-    carrier: str = "bosta",
+    carrier: str,
     shipping_method: str = "standard",
     notes: str | None = None,
 ) -> str:
@@ -289,13 +321,16 @@ async def create_shipment(
 
     Args:
         order_id: The order to ship (UUID).
-        carrier: bosta, mylerz, or jt. Defaults to bosta.
+        carrier: Which carrier to book with. Required — ask the merchant
+            rather than guessing; this books a real delivery and, until
+            recently, an unrecognised value silently became Bosta.
+            Call `list_shipment_carriers` to see what this store supports.
         shipping_method: Carrier shipping method (default 'standard').
         notes: Optional note for the shipment.
     """
     try:
         oid = validate_uuid(order_id, "order_id")
-        c = validate_choice(carrier, SHIPMENT_CARRIERS, "carrier")
+        c = validate_choice(carrier, await known_carriers(), "carrier")
         body: dict[str, Any] = {
             "order_id": oid,
             "carrier": c,
