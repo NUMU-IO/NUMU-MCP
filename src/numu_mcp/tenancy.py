@@ -130,12 +130,26 @@ class PassthroughAuthMiddleware:
     lifetime so everything downstream is store-scoped.
     """
 
-    def __init__(self, app: Any, api_base: str) -> None:
+    def __init__(
+        self,
+        app: Any,
+        api_base: str,
+        public_url: str = "",
+        public_paths: frozenset[str] = frozenset(),
+    ) -> None:
         self._app = app
         self._api_base = api_base
+        self._public_paths = public_paths
+        # Tells OAuth clients (ChatGPT, Claude) where to sign in (RFC 9728).
+        metadata = f"{public_url}/.well-known/oauth-protected-resource"
+        self._challenge = f'Bearer resource_metadata="{metadata}"'
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        if scope["type"] != "http" or scope.get("method") == "OPTIONS":
+        if (
+            scope["type"] != "http"
+            or scope.get("method") == "OPTIONS"
+            or scope.get("path") in self._public_paths
+        ):
             await self._app(scope, receive, send)
             return
 
@@ -149,9 +163,11 @@ class PassthroughAuthMiddleware:
             await self._reject(
                 send,
                 401,
-                "Missing NUMU API key. Configure this MCP connection with the "
-                "header 'Authorization: Bearer numu_pat_...'. Create a key in "
-                "the NUMU dashboard under Settings → Connect your AI (MCP).",
+                "Missing NUMU API key. Sign in with NUMU, or configure this MCP "
+                "connection with the header 'Authorization: Bearer numu_pat_...'. "
+                "Create a key in the NUMU dashboard under "
+                "Settings → Connect your AI (MCP).",
+                self._challenge,
             )
             return
 
@@ -159,7 +175,9 @@ class PassthroughAuthMiddleware:
         try:
             ctx = await resolve(token, self._api_base)
         except PermissionError as exc:
-            await self._reject(send, 401, str(exc))
+            await self._reject(
+                send, 401, str(exc), f'{self._challenge}, error="invalid_token"'
+            )
             return
         except ConnectionError as exc:
             await self._reject(send, 502, str(exc))
@@ -172,16 +190,21 @@ class PassthroughAuthMiddleware:
             _current.reset(reset)
 
     @staticmethod
-    async def _reject(send: Any, status: int, message: str) -> None:
+    async def _reject(
+        send: Any, status: int, message: str, www_authenticate: str | None = None
+    ) -> None:
         body = json.dumps({"error": message}).encode("utf-8")
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ]
+        if www_authenticate:
+            headers.append((b"www-authenticate", www_authenticate.encode()))
         await send(
             {
                 "type": "http.response.start",
                 "status": status,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
+                "headers": headers,
             }
         )
         await send({"type": "http.response.body", "body": body})
