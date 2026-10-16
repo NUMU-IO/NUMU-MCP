@@ -191,3 +191,21 @@ def test_parked_requests_are_bounded(monkeypatch):
     assert len(store) == 3
     assert oauth._take(store, keys[0]) is None
     assert oauth._take(store, keys[4])["n"] == 4
+
+
+@pytest.mark.parametrize(
+    ("uri", "allowed"),
+    [
+        ("https://chatgpt.com/connector_platform_oauth_redirect", True),
+        ("https://chatgpt.com/connector/oauth/cb_s1-x.Y~z", True),
+        ("https://claude.ai/api/mcp/auth_callback", True),
+        ("https://claude.com/api/mcp/auth_callback", True),
+        ("https://chatgpt.com/connector/oauth/a/b", False),
+        ("https://chatgpt.com/connector/oauth/a?next=https://evil.example", False),
+        ("https://chatgpt.com/connector/oauth/", False),
+        ("https://chatgpt.com.evil.example/connector_platform_oauth_redirect", False),
+        ("http://chatgpt.com/connector_platform_oauth_redirect", False),
+    ],
+)
+def test_redirect_allowlist(uri, allowed):
+    assert bool(oauth._REDIRECT.fullmatch(uri)) is allowed

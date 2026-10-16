@@ -53,7 +53,7 @@ from .runtime import get_settings
 # (developers.openai.com/plugins/build/auth) and Claude's. DCR and CIMD
 # clients are both checked against this list instead of a client registry.
 _REDIRECT = re.compile(
-    r"https://chatgpt\.com/(connector_platform_oauth_redirect|connector/oauth/[A-Za-z0-9_-]+)"
+    r"https://chatgpt\.com/(connector_platform_oauth_redirect|connector/oauth/[^/?#\s]+)"
     r"|https://claude\.(ai|com)/api/mcp/auth_callback"
 )
 
