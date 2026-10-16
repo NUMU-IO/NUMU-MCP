@@ -239,6 +239,9 @@ async def update_product(
         attributes: Replace the FULL attributes object (advanced). Always
             fetch the product first and pass a modified copy — variants and
             other metadata live in here and a partial dict would drop them.
+
+    For a product with variants (sizes, colours), change prices and stock per
+    variant with update_variant, not with price/quantity/attributes here.
     """
     try:
         pid = validate_uuid(product_id, "product_id")
@@ -318,6 +321,132 @@ async def update_product(
         return err(exc, context={"tool": "update_product", "product_id": product_id})
 
 
+# update_variant's money fields come back from the API as strings ("250.00").
+_VARIANT_MONEY = {"price", "compare_at_price", "cost_price"}
+
+
+def _variant_summary(v: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": v.get("id"),
+        "options": v.get("option_values"),
+        "price": v.get("price"),
+        "compare_at_price": v.get("compare_at_price"),
+        "sku": v.get("sku"),
+        "inventory_quantity": v.get("inventory_quantity"),
+        "in_stock": v.get("is_in_stock"),
+    }
+
+
+@mcp.tool()
+async def list_variants(product_id: str) -> str:
+    """List a product's variants (e.g. each size/colour) with their ids,
+    option values, price, SKU and stock. Use the ids with update_variant.
+
+    Args:
+        product_id: The product's UUID.
+    """
+    try:
+        pid = validate_uuid(product_id, "product_id")
+        variants = await get_client().get(f"products/{pid}/variants")
+        return dumps({"variants": [_variant_summary(v) for v in items_of(variants)]})
+    except Exception as exc:  # noqa: BLE001
+        return err(exc, context={"tool": "list_variants", "product_id": product_id})
+
+
+@mcp.tool()
+async def update_variant(
+    product_id: str,
+    variant_id: str,
+    price: float | None = None,
+    compare_at_price: float | None = None,
+    cost_price: float | None = None,
+    sku: str | None = None,
+    inventory_quantity: int | None = None,
+) -> str:
+    """Update ONE variant of a product (its price, compare-at price, cost,
+    SKU or stock). Only the fields you pass change; the product's other
+    variants and options are untouched. This is the safe way to change prices
+    on a product with variants — do not rewrite `attributes` for that.
+
+    The product's base (listing) price follows its cheapest variant
+    automatically. To change several variants, call this once per variant
+    (get the ids from list_variants).
+
+    Args:
+        product_id: The product's UUID.
+        variant_id: The variant's UUID (from list_variants).
+        price: New price in major units (e.g. 450 for EGP 450).
+        compare_at_price: New "was" price in major units.
+        cost_price: New cost price in major units.
+        sku: New SKU (must be unique in the store).
+        inventory_quantity: New absolute stock for this variant.
+    """
+    try:
+        pid = validate_uuid(product_id, "product_id")
+        vid = validate_uuid(variant_id, "variant_id")
+        sent = {
+            "price": price,
+            "compare_at_price": compare_at_price,
+            "cost_price": cost_price,
+            "sku": sku,
+            "inventory_quantity": inventory_quantity,
+        }
+        body = {k: v for k, v in sent.items() if v is not None}
+        if not body:
+            from ..formatting import ValidationError
+
+            raise ValidationError("Provide at least one field to update.")
+
+        # Snapshot the changed fields so undo_last_action can restore them.
+        variants = items_of(await get_client().get(f"products/{pid}/variants"))
+        before = next((v for v in variants if v.get("id") == vid), None)
+        if before is None:
+            from ..formatting import ValidationError
+
+            raise ValidationError("That variant does not belong to this product.")
+        restore: dict[str, Any] = {}
+        for key in body:
+            prev = before.get(key)
+            if key in _VARIANT_MONEY and prev is not None:
+                prev = float(prev)
+            restore[key] = prev
+
+        path = f"products/{pid}/variants/{vid}"
+        updated = await get_client().patch(path, json=body)
+        await record_mutation(
+            "update_variant",
+            {"product_id": pid, "variant_id": vid, "fields": list(body)},
+            summary=f"updated {list(body)} on variant {vid} of product {pid}",
+            undo={
+                "description": f"Restore variant {vid} fields {list(restore)}",
+                "request": {
+                    "method": "PATCH",
+                    "path": path,
+                    "json": restore,
+                    "store_scoped": True,
+                },
+            },
+        )
+        return dumps(
+            {
+                "updated": True,
+                "before": {k: before.get(k) for k in body},
+                "variant": _variant_summary(updated)
+                if isinstance(updated, dict)
+                else updated,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return err(
+            exc,
+            context={
+                "tool": "update_variant",
+                "product_id": product_id,
+                "variant_id": variant_id,
+            },
+        )
+
+
 @mcp.tool()
 async def delete_product(product_id: str, confirm: str | None = None) -> str:
     """Delete a product permanently. Irreversible — requires confirmation.
@@ -333,7 +462,9 @@ async def delete_product(product_id: str, confirm: str | None = None) -> str:
         pid = validate_uuid(product_id, "product_id")
         args = {"product_id": pid}
         if not confirm:
-            return confirmation_message("delete_product", args, issue_token("delete_product", args))
+            return confirmation_message(
+                "delete_product", args, issue_token("delete_product", args)
+            )
         if not consume_token(confirm, "delete_product", args):
             return "Confirmation token is invalid or expired. Re-run delete_product to get a new one."
         await get_client().delete(f"products/{pid}")
