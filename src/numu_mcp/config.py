@@ -71,6 +71,16 @@ class Settings(BaseSettings):
         default=8765, ge=1, le=65535, description="Bind port when transport='http'."
     )
 
+    # ── OAuth sign-in (hosted mode; see oauth.py) ─────────────────────────
+    public_url: str = Field(
+        default="https://mcp.numueg.app",
+        description="This server's public origin: the OAuth issuer clients see.",
+    )
+    hub_url: str = Field(
+        default="https://merchant.numueg.app",
+        description="Merchant hub origin; its /mcp/authorize page asks for consent.",
+    )
+
     log_level: str = Field(default="INFO", description="Python logging level.")
 
     data_dir: str = Field(
@@ -99,6 +109,12 @@ class Settings(BaseSettings):
         if v.endswith("/api/v1"):
             v = v[: -len("/api/v1")]
         return v
+
+    @field_validator("public_url", "hub_url")
+    @classmethod
+    def _strip_origin(cls, v: str) -> str:
+        # The issuer is compared byte for byte; a trailing slash breaks sign-in.
+        return v.strip().rstrip("/")
 
     @field_validator("transport")
     @classmethod

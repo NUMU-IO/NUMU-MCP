@@ -15,6 +15,7 @@ import sys
 from pydantic import ValidationError
 
 # Importing these modules registers all resources, tools and prompts on `mcp`.
+from . import oauth
 from . import prompts as _prompts  # noqa: E402,F401
 from . import resources as _resources  # noqa: E402,F401
 from . import tools as _tools  # noqa: E402,F401
@@ -91,7 +92,10 @@ def main() -> None:
 
         mcp.settings.stateless_http = True
         app = PassthroughAuthMiddleware(
-            mcp.streamable_http_app(), api_base=settings.api_base
+            mcp.streamable_http_app(),
+            api_base=settings.api_base,
+            public_url=settings.public_url,
+            public_paths=oauth.PUBLIC_PATHS,
         )
         logging.getLogger("numu-mcp").info(
             "Starting NUMU MCP server (HTTP, multi-tenant pass-through) on %s:%s",
