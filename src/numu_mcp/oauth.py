@@ -73,6 +73,9 @@ PUBLIC_PATHS = frozenset(
 
 _REQUEST_TTL = 900  # the merchant may have to log in to the hub first
 _CODE_TTL = 300
+# /authorize needs no key, so a flood must not grow memory without bound
+# (the container is capped at 384 MB). The oldest entries go first.
+_MAX_ENTRIES = 10_000
 _ICON = Path(__file__).with_name("assets") / "icon.png"
 
 # ponytail: in memory, one uvicorn process. A restart mid sign-in only makes
@@ -85,6 +88,8 @@ def _put(store: dict[str, dict[str, Any]], value: dict[str, Any], ttl: int) -> s
     now = time.time()
     for key in [k for k, v in store.items() if v["exp"] < now]:
         del store[key]
+    while len(store) >= _MAX_ENTRIES:
+        store.pop(next(iter(store)))
     key = secrets.token_urlsafe(32)
     store[key] = {**value, "exp": now + ttl}
     return key

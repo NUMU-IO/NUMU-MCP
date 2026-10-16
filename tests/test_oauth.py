@@ -182,3 +182,12 @@ def test_plugin_archive(client):
     assert set(archive.namelist()) == {"plugin.json", "mcp.json", "assets/icon.png"}
     servers = json.loads(archive.read("mcp.json"))["mcpServers"]
     assert servers["numu"]["url"] == f"{ISSUER}/mcp"
+
+
+def test_parked_requests_are_bounded(monkeypatch):
+    monkeypatch.setattr(oauth, "_MAX_ENTRIES", 3)
+    store: dict = {}
+    keys = [oauth._put(store, {"n": i}, 60) for i in range(5)]
+    assert len(store) == 3
+    assert oauth._take(store, keys[0]) is None
+    assert oauth._take(store, keys[4])["n"] == 4
