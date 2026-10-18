@@ -39,6 +39,9 @@ TOOL_REQUIREMENTS: dict[str, dict[str, str | None]] = {
     "update_product": {"domain": "products", "feature": None},
     "list_variants": {"domain": "products", "feature": None},
     "update_variant": {"domain": "products", "feature": None},
+    "create_variant": {"domain": "products", "feature": None},
+    "delete_variant": {"domain": "products", "feature": None},
+    "add_product_image": {"domain": "products", "feature": None},
     "delete_product": {"domain": "products", "feature": None},
     "list_categories": {"domain": "products", "feature": None},
     # Inventory

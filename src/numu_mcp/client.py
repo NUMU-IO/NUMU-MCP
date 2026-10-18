@@ -130,6 +130,7 @@ class NumuClient:
         store_scoped: bool = True,
         params: dict[str, Any] | None = None,
         json: Any | None = None,
+        files: Any | None = None,
         cache_ttl: float | None = None,
     ) -> Any:
         """Perform a request and return the unwrapped ``data`` payload.
@@ -157,7 +158,12 @@ class NumuClient:
                 return cached
         try:
             response = await self._client.request(
-                method, url, params=clean_params, json=json, headers=self._auth_headers()
+                method,
+                url,
+                params=clean_params,
+                json=json,
+                files=files,
+                headers=self._auth_headers(),
             )
             # NUMU-api no longer 307-redirects between /path and /path/ —
             # collection routes require the trailing slash while detail routes
@@ -170,6 +176,7 @@ class NumuClient:
                     toggled,
                     params=clean_params,
                     json=json,
+                    files=files,
                     headers=self._auth_headers(),
                 )
                 if retry.status_code != 404:

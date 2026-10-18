@@ -122,10 +122,49 @@ async def get_product(product_id: str) -> str:
         return err(exc)
 
 
+def _check_options_variants(
+    options: list[dict[str, Any]] | None, variants: list[dict[str, Any]] | None
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+    """Validate the option/variant matrix before it reaches the API, so the
+    model gets a precise message instead of a half-built product."""
+    from ..formatting import ValidationError
+
+    axes: dict[str, set[str]] = {}
+    if options is not None:
+        if len(options) > 3:
+            raise ValidationError("A product can have at most 3 options.")
+        clean = []
+        for i, opt in enumerate(options):
+            name = str(opt.get("name") or "").strip()
+            values = [str(v).strip() for v in opt.get("values") or [] if str(v).strip()]
+            if not name or not values:
+                raise ValidationError(f"Option {i + 1} needs a name and values.")
+            axes[name] = set(values)
+            clean.append({"name": name, "values": values, "position": i})
+        options = clean
+    if variants is not None:
+        for i, v in enumerate(variants):
+            if v.get("price") is None:
+                raise ValidationError(f"Variant {i + 1} needs a price.")
+            for key, val in (v.get("option_values") or {}).items():
+                if axes and (key not in axes or str(val) not in axes[key]):
+                    raise ValidationError(
+                        f"Variant {i + 1}: '{key}: {val}' is not one of the options."
+                    )
+    return options, variants
+
+
+def _apply_extras(body: dict[str, Any], fields: dict[str, Any]) -> None:
+    """Copy the optional product fields that were actually given."""
+    for key, value in fields.items():
+        if value is not None:
+            body[key] = value
+
+
 @mcp.tool()
 async def create_product(
     name: str,
-    price: float,
+    price: float | None = None,
     sku: str | None = None,
     description: str | None = None,
     product_type: str = "physical",
@@ -137,12 +176,27 @@ async def create_product(
     status: str | None = None,
     tags: list[str] | None = None,
     images: list[str] | None = None,
+    options: list[dict[str, Any]] | None = None,
+    variants: list[dict[str, Any]] | None = None,
+    short_description: str | None = None,
+    brand: str | None = None,
+    slug: str | None = None,
+    seo_title: str | None = None,
+    seo_description: str | None = None,
+    weight: float | None = None,
+    attributes: dict[str, Any] | None = None,
+    extra_fields: dict[str, Any] | None = None,
 ) -> str:
-    """Create a new product.
+    """Create a new product, with its options and variants in one call.
+
+    To copy the structure of an existing product (same options, same kind of
+    variants), read it with get_product first and reuse its options/variants.
+    Add pictures after creating with add_product_image (or pass image URLs).
 
     Args:
         name: Product name (required).
-        price: Selling price in major units, e.g. 49.99 (required).
+        price: Selling price in major units, e.g. 49.99. Optional when
+            variants are given (then it is the cheapest variant's price).
         sku: Stock-keeping unit.
         description: Long description.
         product_type: physical, digital, or service.
@@ -154,13 +208,39 @@ async def create_product(
         status: draft, active, or archived. Defaults to the API default.
         tags: List of tag strings.
         images: List of image URLs.
+        options: The product's option axes (max 3), e.g.
+            [{"name": "Format",
+              "values": ["Paperback", "Hardcover", "Special edition"]},
+             {"name": "Paper", "values": ["White", "Creamy"]}].
+        variants: One entry per combination you sell, e.g.
+            [{"option_values": {"Format": "Paperback", "Paper": "White"},
+              "price": 180, "compare_at_price": 220, "sku": "VIC-PB-W",
+              "inventory_quantity": 5}]. `price` is required on each; the keys
+            of option_values must be option names and the values must be
+            listed under that option. 3 formats x 2 papers = 6 variants.
+        short_description: Short summary shown near the price.
+        brand: Brand, or the author for a book.
+        slug: URL slug (auto-generated from the name when omitted).
+        seo_title: SEO title (max 70 chars).
+        seo_description: SEO description (max 160 chars).
+        weight: Shipping weight in kg.
+        attributes: Free-form key/value attributes.
+        extra_fields: Any other field the NUMU product API accepts (e.g.
+            sale_price, sale_starts_at, sale_ends_at, related_product_ids,
+            requires_shipping, tax_exempt, template_suffix).
     """
     try:
-        if not name.strip():
-            from ..formatting import ValidationError
+        from ..formatting import ValidationError
 
+        if not name.strip():
             raise ValidationError("name must not be empty.")
-        body: dict[str, Any] = {
+        options, variants = _check_options_variants(options, variants)
+        if price is None:
+            if not variants:
+                raise ValidationError("Give a price, or variants with prices.")
+            price = min(float(v["price"]) for v in variants)
+        body: dict[str, Any] = dict(extra_fields or {})
+        body |= {
             "name": name.strip(),
             "price": price,
             "product_type": validate_choice(
@@ -185,16 +265,33 @@ async def create_product(
             body["tags"] = tags
         if images:
             body["images"] = images
+        _apply_extras(
+            body,
+            {
+                "options": options,
+                "variants": variants,
+                "short_description": short_description,
+                "brand": brand,
+                "slug": slug,
+                "seo_title": seo_title,
+                "seo_description": seo_description,
+                "weight": weight,
+                "attributes": attributes,
+            },
+        )
 
         product = await get_client().post("products", json=body)
         summary = _product_summary(product) if isinstance(product, dict) else product
         new_id = product.get("id") if isinstance(product, dict) else None
         await record_mutation(
             "create_product",
-            {"name": body["name"], "price": price},
+            {"name": body["name"], "price": price, "variants": len(variants or [])},
             summary=f"created product {new_id}",
         )
-        return dumps({"created": True, "product": summary})
+        out: dict[str, Any] = {"created": True, "product": summary}
+        if isinstance(product, dict) and product.get("variants"):
+            out["variants"] = [_variant_summary(v) for v in product["variants"]]
+        return dumps(out)
     except Exception as exc:  # noqa: BLE001
         return err(exc, context={"tool": "create_product"})
 
@@ -217,8 +314,20 @@ async def update_product(
     seo_title: str | None = None,
     seo_description: str | None = None,
     attributes: dict[str, Any] | None = None,
+    options: list[dict[str, Any]] | None = None,
+    variants: list[dict[str, Any]] | None = None,
+    short_description: str | None = None,
+    brand: str | None = None,
+    slug: str | None = None,
+    weight: float | None = None,
+    extra_fields: dict[str, Any] | None = None,
 ) -> str:
     """Update fields on an existing product. Only provided fields are changed.
+
+    Changing ONE variant's price/stock/SKU: use update_variant. Adding or
+    removing ONE variant: create_variant / delete_variant. Pass options and
+    variants here only to rebuild the whole option set (e.g. turn a simple
+    product into a 6-variant one, or add a new option axis).
 
     Args:
         product_id: The product's UUID.
@@ -239,13 +348,33 @@ async def update_product(
         attributes: Replace the FULL attributes object (advanced). Always
             fetch the product first and pass a modified copy — variants and
             other metadata live in here and a partial dict would drop them.
-
-    For a product with variants (sizes, colours), change prices and stock per
-    variant with update_variant, not with price/quantity/attributes here.
+        options: The FULL new option list (max 3), same shape as create_product.
+        variants: The FULL new variant list, same shape as create_product.
+            Include each existing variant's "id" (from list_variants) to keep
+            it; a variant left out is DELETED. Send options and variants
+            together when the axes change.
+        short_description: Short summary shown near the price.
+        brand: Brand, or the author for a book.
+        slug: URL slug.
+        weight: Shipping weight in kg.
+        extra_fields: Any other field the NUMU product API accepts (e.g.
+            sale_price, sale_starts_at, sale_ends_at, related_product_ids).
     """
     try:
         pid = validate_uuid(product_id, "product_id")
-        body: dict[str, Any] = {}
+        options, variants = _check_options_variants(options, variants)
+        body: dict[str, Any] = dict(extra_fields or {})
+        _apply_extras(
+            body,
+            {
+                "options": options,
+                "variants": variants,
+                "short_description": short_description,
+                "brand": brand,
+                "slug": slug,
+                "weight": weight,
+            },
+        )
         if name is not None:
             body["name"] = name
         if price is not None:
@@ -445,6 +574,196 @@ async def update_variant(
                 "variant_id": variant_id,
             },
         )
+
+
+@mcp.tool()
+async def create_variant(
+    product_id: str,
+    option_values: dict[str, str],
+    price: float,
+    compare_at_price: float | None = None,
+    cost_price: float | None = None,
+    sku: str | None = None,
+    inventory_quantity: int = 0,
+    image_url: str | None = None,
+) -> str:
+    """Add ONE variant to an existing product (e.g. a new "Special edition /
+    Creamy" combination). The option names and values must already exist on
+    the product; to add a new option or value, use update_product with the
+    full options + variants instead.
+
+    Args:
+        product_id: The product's UUID.
+        option_values: e.g. {"Format": "Special edition", "Paper": "Creamy"}.
+        price: Price in major units.
+        compare_at_price: "Was" price in major units.
+        cost_price: Cost in major units.
+        sku: SKU (must be unique in the store).
+        inventory_quantity: Starting stock.
+        image_url: Image shown when this variant is selected.
+    """
+    try:
+        pid = validate_uuid(product_id, "product_id")
+        body: dict[str, Any] = {
+            "option_values": option_values,
+            "price": price,
+            "inventory_quantity": inventory_quantity,
+        }
+        _apply_extras(
+            body,
+            {
+                "compare_at_price": compare_at_price,
+                "cost_price": cost_price,
+                "sku": sku,
+                "image_url": image_url,
+            },
+        )
+        variant = await get_client().post(f"products/{pid}/variants", json=body)
+        vid = variant.get("id") if isinstance(variant, dict) else None
+        await record_mutation(
+            "create_variant",
+            {"product_id": pid, "option_values": option_values, "price": price},
+            summary=f"added variant {vid} to product {pid}",
+        )
+        return dumps(
+            {
+                "created": True,
+                "variant": _variant_summary(variant)
+                if isinstance(variant, dict)
+                else variant,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return err(exc, context={"tool": "create_variant", "product_id": product_id})
+
+
+@mcp.tool()
+async def delete_variant(
+    product_id: str, variant_id: str, confirm: str | None = None
+) -> str:
+    """Remove ONE variant from a product. Irreversible — requires confirmation.
+
+    Call once without `confirm` to get a token, confirm with the user, then
+    call again passing that token as `confirm`.
+
+    Args:
+        product_id: The product's UUID.
+        variant_id: The variant's UUID (from list_variants).
+        confirm: The confirmation token from the first call.
+    """
+    try:
+        pid = validate_uuid(product_id, "product_id")
+        vid = validate_uuid(variant_id, "variant_id")
+        args = {"product_id": pid, "variant_id": vid}
+        if not confirm:
+            return confirmation_message(
+                "delete_variant", args, issue_token("delete_variant", args)
+            )
+        if not consume_token(confirm, "delete_variant", args):
+            return (
+                "Confirmation token is invalid or expired. "
+                "Re-run delete_variant to get a new one."
+            )
+        await get_client().delete(f"products/{pid}/variants/{vid}")
+        await record_mutation(
+            "delete_variant", args, summary=f"deleted variant {vid} of product {pid}"
+        )
+        return dumps({"deleted": True, "product_id": pid, "variant_id": vid})
+    except Exception as exc:  # noqa: BLE001
+        return err(exc, context={"tool": "delete_variant", "variant_id": variant_id})
+
+
+_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # the API's own upload limit
+
+
+async def _download_public_image(url: str) -> tuple[bytes, str, str]:
+    """Fetch an image from a public https URL, refusing private addresses.
+
+    The server fetches on behalf of the caller, so every hop is checked: https
+    only, a public IP, at most 3 redirects, an image content type, <= 5 MB.
+
+    ponytail: the IP is checked before httpx connects, so a DNS answer that
+    changes between the two (rebinding) is not caught; the caller is already an
+    authenticated store key, which bounds the risk. Pin the resolved IP if
+    this ever accepts anonymous input.
+    """
+    import asyncio
+    import ipaddress
+    from urllib.parse import urljoin, urlsplit
+
+    import httpx
+
+    from ..formatting import ValidationError
+
+    async def check(target: str) -> None:
+        parts = urlsplit(target)
+        if parts.scheme != "https" or not parts.hostname:
+            raise ValidationError("image_url must be an https:// link to an image.")
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            parts.hostname, parts.port or 443
+        )
+        if not infos or any(
+            not ipaddress.ip_address(info[4][0]).is_global for info in infos
+        ):
+            raise ValidationError("That image address is not a public website.")
+
+    current = url
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        for _ in range(4):
+            await check(current)
+            async with client.stream(
+                "GET", current, headers={"User-Agent": "Mozilla/5.0 numu-mcp"}
+            ) as res:
+                if res.is_redirect and res.headers.get("location"):
+                    current = urljoin(current, res.headers["location"])
+                    continue
+                if res.status_code != 200:
+                    raise ValidationError(
+                        f"Could not download the image (HTTP {res.status_code})."
+                    )
+                ctype = res.headers.get("content-type", "").split(";")[0].strip()
+                if ctype not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+                    raise ValidationError(
+                        "That link is not a JPEG/PNG/WebP/GIF image "
+                        f"({ctype or 'unknown'})."
+                    )
+                data = bytearray()
+                async for chunk in res.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > _IMAGE_MAX_BYTES:
+                        raise ValidationError("The image is larger than 5 MB.")
+                name = urlsplit(current).path.rsplit("/", 1)[-1] or "image"
+                return bytes(data), ctype, name
+    raise ValidationError("The image link redirects too many times.")
+
+
+@mcp.tool()
+async def add_product_image(product_id: str, image_url: str) -> str:
+    """Upload a picture to a product from a public https image link.
+
+    NUMU downloads it, converts it to WebP in three sizes and hosts it, then
+    adds it to the product's images (the first image is the main one). Prefer
+    this over passing raw URLs in `images`, which leaves the picture on the
+    other site.
+
+    Args:
+        product_id: The product's UUID.
+        image_url: A public https link to a JPEG, PNG, WebP or GIF (max 5 MB).
+    """
+    try:
+        pid = validate_uuid(product_id, "product_id")
+        data, ctype, name = await _download_public_image(image_url)
+        result = await get_client().request(
+            "POST", f"products/{pid}/images", files={"file": (name, data, ctype)}
+        )
+        await record_mutation(
+            "add_product_image",
+            {"product_id": pid, "image_url": image_url},
+            summary=f"uploaded an image to product {pid}",
+        )
+        return dumps({"uploaded": True, "image": result})
+    except Exception as exc:  # noqa: BLE001
+        return err(exc, context={"tool": "add_product_image", "product_id": product_id})
 
 
 @mcp.tool()
